@@ -1,7 +1,7 @@
 requests
-notion-client
+notion-client==2.5.0
 github-heatmap
 retrying
 pendulum
 python-dotenv
-weread2notionpro
+weread2notionpro==0.6.8
