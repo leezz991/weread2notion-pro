@@ -3,14 +3,17 @@ name: read time sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "47 */3 * * *"
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: weread-notion-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: write
 jobs:
   sync:
     name: Sync
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_PAGE: ${{ secrets.NOTION_PAGE }}
@@ -33,6 +36,17 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       YEAR: ${{ vars.YEAR }}
     steps:
+      - name: Check sync configuration
+        shell: bash
+        run: |
+          if [[ -z "${NOTION_TOKEN:-}" || -z "${NOTION_PAGE:-}" ]]; then
+            echo "::error::NOTION_TOKEN or NOTION_PAGE is missing. Check repository Actions secrets."
+            exit 1
+          fi
+          if [[ -z "${WEREAD_COOKIE:-}" && ( -z "${CC_ID:-}" || -z "${CC_PASSWORD:-}" ) ]]; then
+            echo "::error::Set WEREAD_COOKIE or a complete CookieCloud CC_ID/CC_PASSWORD pair."
+            exit 1
+          fi
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Python
@@ -43,6 +57,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Verify legacy Notion API compatibility
+        shell: bash
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+          from notion_client import Client
+          notion = Client(auth='preflight-nonsecret-token')
+          assert hasattr(notion.databases, 'query'), 'Expected legacy databases.query; check notion-client pin'
+          print('SDK compatibility OK: notion-client', version('notion-client'), 'weread2notionpro', version('weread2notionpro'))
+          PY
       - name: Remove folder
         run: rm -rf ./OUT_FOLDER
       - name: Set default year if not provided
@@ -63,9 +87,13 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add .
-          git commit -m 'add new heatmap' || echo "nothing to commit"
-          git push || echo "nothing to push"
+          git add -A OUT_FOLDER
+          if ! git diff --cached --quiet; then
+            git commit -m 'Refresh reading heatmap'
+            git push
+          else
+            echo 'Reading heatmap unchanged; no commit needed'
+          fi
       - name: read time sync
         run: |
           read_time
